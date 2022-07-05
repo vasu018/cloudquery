@@ -1,4 +1,4 @@
-package logging
+package cmd
 
 import (
 	"fmt"
@@ -13,39 +13,6 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// GlobalConfig is the global alterable logging config
-var GlobalConfig Config
-
-// Config for logging
-type Config struct {
-	// Enable console logging
-	ConsoleLoggingEnabled bool `yaml:"enable_console_logging,omitempty" json:"enable_console_logging,omitempty" hcl:"enable_console_logging,optional"`
-	// Enable Verbose logging
-	Verbose bool `yaml:"verbose,omitempty" json:"verbose,omitempty" hcl:"verbose,optional"`
-	// EncodeLogsAsJson makes the logging framework logging JSON
-	EncodeLogsAsJson bool `yaml:"encode_logs_as_json,omitempty" json:"encode_logs_as_json,omitempty" hcl:"encode_logs_as_json,optional"`
-	// FileLoggingEnabled makes the framework logging to a file
-	// the fields below can be skipped if this value is false!
-	FileLoggingEnabled bool `yaml:"file_logging_enabled,omitempty" json:"file_logging_enabled,omitempty" hcl:"file_logging_enabled,optional"`
-	// Directory to logging to to when file logging is enabled
-	Directory string `yaml:"directory,omitempty" json:"directory,omitempty" hcl:"directory,optional"`
-	// Filename is the name of the logfile which will be placed inside the directory
-	Filename string `yaml:"filename,omitempty" json:"filename,omitempty" hcl:"filename,optional"`
-	// MaxSize the max size in MB of the logfile before it's rolled
-	MaxSize int `yaml:"max_size,omitempty" json:"max_size,omitempty" hcl:"max_size,optional"`
-	// MaxBackups the max number of rolled files to keep
-	MaxBackups int `yaml:"max_backups,omitempty" json:"max_backups,omitempty" hcl:"max_backups,optional"`
-	// MaxAge the max age in days to keep a logfile
-	MaxAge int `yaml:"max_age,omitempty" json:"max_age,omitempty" hcl:"max_age,optional"`
-	// Console logging will be without color, console logging must be enabled first.
-	ConsoleNoColor bool `yaml:"console_no_color,omitempty" json:"console_no_color,omitempty" hcl:"console_no_color,optional"`
-	// Unique Identifier of execution
-	InstanceId string
-
-	// console is a writer that will be used for console output. If it is not set os.Stderr will be used.
-	console io.Writer
-}
-
 // Configure sets up the logging framework
 //
 // In production, the container logs will be collected and file logging should be disabled. However,
@@ -54,7 +21,7 @@ type Config struct {
 //
 // The output logging file should be located at /var/logging/service-xyz/service-xyz.logging and
 // will be rolled according to configuration set.
-func Configure(config Config) zerolog.Logger {
+func initLogging(options rootOptions) zerolog.Logger {
 	var writers []io.Writer
 
 	if config.ConsoleLoggingEnabled {
@@ -102,27 +69,6 @@ func Configure(config Config) zerolog.Logger {
 		Msg("logging configured")
 
 	return logger
-}
-
-// Reconfigure reconfigures the already initialized Logger with new values
-func Reconfigure(originalConfig, updatedConfig Config) {
-	// FIXME these look buggy
-	if updatedConfig.Verbose {
-		originalConfig.Verbose = updatedConfig.Verbose
-	}
-	if updatedConfig.ConsoleLoggingEnabled {
-		originalConfig.ConsoleLoggingEnabled = updatedConfig.ConsoleLoggingEnabled
-	}
-	if updatedConfig.EncodeLogsAsJson {
-		originalConfig.EncodeLogsAsJson = updatedConfig.EncodeLogsAsJson
-	}
-	if !updatedConfig.FileLoggingEnabled {
-		originalConfig.FileLoggingEnabled = updatedConfig.FileLoggingEnabled
-	}
-	if updatedConfig.ConsoleNoColor {
-		originalConfig.ConsoleNoColor = updatedConfig.ConsoleNoColor
-	}
-	log.Logger = Configure(GlobalConfig)
 }
 
 func newRollingFile(config Config) io.Writer {
