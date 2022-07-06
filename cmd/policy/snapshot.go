@@ -1,9 +1,11 @@
 package policy
 
 import (
-	"github.com/cloudquery/cloudquery/cmd/utils"
-	"github.com/cloudquery/cloudquery/pkg/errors"
-	"github.com/cloudquery/cloudquery/pkg/ui/console"
+	"fmt"
+
+	"github.com/cloudquery/cloudquery/internal/getter"
+	"github.com/cloudquery/cloudquery/pkg/policy"
+	"github.com/cloudquery/cloudquery/pkg/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -17,15 +19,25 @@ func newCmdPolicySnapshot() *cobra.Command {
 		Short: snapshotShort,
 		Long:  snapshotShort,
 		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := console.CreateClient(cmd.Context(), utils.GetConfigFile(), false, nil, utils.InstanceId)
-			if err != nil {
-				return err
-			}
-			err = c.SnapshotPolicy(cmd.Context(), args[0], args[1])
-			errors.CaptureError(err, map[string]string{"command": "policy_snapshot"})
-			return err
-		},
+		RunE:  runSnapshot,
 	}
 	return cmd
+}
+
+func runSnapshot(cmd *cobra.Command, args []string) error {
+	p, err := policy.Load(cmd.Context(), c.cfg.CloudQuery.PolicyDirectory, &policy.Policy{Name: p.Name, Source: p.Source})
+	if err != nil {
+		ui.ColorizedOutput(ui.ColorError, err.Error())
+		return fmt.Errorf("failed to load policies: %w", err)
+	}
+	if !p.HasChecks() {
+		return fmt.Errorf("no checks loaded")
+	}
+
+	_, subPath := getter.ParseSourceSubPolicy(args[0])
+	pol := p.Filter(subPath)
+	if pol.TotalQueries() != 1 {
+		return fmt.Errorf("selector must specify only a single control")
+	}
+	return policy.Snapshot(cmd.Context(), c.StateManager, c.Storage, &pol, args[1], subPath)
 }

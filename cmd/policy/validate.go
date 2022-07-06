@@ -5,8 +5,10 @@ import (
 
 	"github.com/cloudquery/cloudquery/cmd/utils"
 	"github.com/cloudquery/cloudquery/pkg/errors"
+	"github.com/cloudquery/cloudquery/pkg/policy"
 	"github.com/cloudquery/cloudquery/pkg/ui/console"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 const (
@@ -20,7 +22,7 @@ func newCmdPolicyValidate() *cobra.Command {
 		Long:  validateShort,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := console.CreateClient(cmd.Context(), utils.GetConfigFile(), false, nil, utils.InstanceId)
+			c, err := console.CreateClient(cmd.Context(), viper.ConfigFileUsed(), false, nil, utils.InstanceId)
 			if err != nil {
 				return err
 			}
@@ -33,4 +35,11 @@ func newCmdPolicyValidate() *cobra.Command {
 		},
 	}
 	return cmd
+}
+
+func runValidate(cmd *cobra.Command, args []string) error {
+	return policy.Validate(cmd.Context(), c.Storage, &policy.ValidateRequest{
+		Policy:    policyToValidate[0],
+		Directory: c.cfg.CloudQuery.PolicyDirectory,
+	})
 }

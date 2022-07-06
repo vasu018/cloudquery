@@ -37,7 +37,7 @@ type ProgressOptions struct {
 
 type ProgressOption func(o *ProgressOptions)
 
-var emojiStatus = map[string]string{
+var EmojiStatus = map[string]string{
 	ui.StatusOK:         color.GreenString("✓"),
 	ui.StatusInfo:       "📋",
 	ui.StatusError:      color.RedString("❌"),

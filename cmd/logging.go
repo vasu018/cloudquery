@@ -20,68 +20,65 @@ import (
 // problems in the containerized pipeline
 //
 // The output logging file should be located at /var/logging/service-xyz/service-xyz.logging and
-// will be rolled according to configuration set.
-func initLogging(options rootOptions) zerolog.Logger {
+// will be rolled accocdrding to configuration set.
+func initLogging(options rootOptions) {
 	var writers []io.Writer
 
-	if config.ConsoleLoggingEnabled {
-		if config.EncodeLogsAsJson {
+	if options.LogConsole {
+		if options.LogFormat.Value == "json" {
 			writers = append(writers, os.Stdout)
 		} else {
-			console := config.console
-			if console == nil {
-				console = os.Stderr
-			}
-			writers = append(writers, zerolog.ConsoleWriter{FormatLevel: formatLevel(config.ConsoleNoColor), Out: console, NoColor: config.ConsoleNoColor})
+			// console := config.console
+			// if console == nil {
+			console := os.Stderr
+			// }
+			writers = append(writers, zerolog.ConsoleWriter{FormatLevel: formatLevel(options.Color.Value), Out: console, NoColor: options.Color.Value})
 		}
 	}
 
-	if config.FileLoggingEnabled {
-		writers = append(writers, newRollingFile(config))
+	if !options.NoLogFile {
+		writers = append(writers, newRollingFile(options))
 	}
 	mw := io.MultiWriter(writers...)
 
 	// Default level is info, unless verbose flag is on
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
-	if config.Verbose {
-		zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	}
 
 	logger := zerolog.New(mw).With().Timestamp().Str("instance_id", config.InstanceId).Logger()
 	// override global logger
 	log.Logger = logger
-	// Default level is info, unless verbose flag is on
-	logger.Level(zerolog.InfoLevel)
-	if config.Verbose {
-		logger.Level(zerolog.DebugLevel)
+	level, err := zerolog.ParseLevel(options.LogLevel.Value)
+	if err != nil {
+		panic(err)
 	}
+	logger.Level(level)
 
 	logger.Info().
-		Bool("fileLogging", config.FileLoggingEnabled).
-		Bool("jsonLogOutput", config.EncodeLogsAsJson).
-		Bool("consoleLog", config.ConsoleLoggingEnabled).
-		Bool("verbose", config.Verbose).
-		Str("logDirectory", config.Directory).
-		Str("fileName", config.Filename).
-		Int("maxSizeMB", config.MaxSize).
-		Int("maxBackups", config.MaxBackups).
-		Int("maxAgeInDays", config.MaxAge).
+		Bool("no-log-file", options.NoLogFile).
+		Str("log-format", options.LogFormat.Value).
+		Bool("log-console", options.LogConsole).
+		Str("log-level", options.LogLevel.Value).
+		Str("log-directory", options.LogDirectory).
+		Str("log-filename", options.LogFilename).
+		Int("log-file-max-size", options.LogFileMaxSize).
+		Int("log-file-max-backups", options.LogFileMaxBackups).
+		Int("log-file-max-age", options.LogFileMaxAge).
 		Msg("logging configured")
 
 	return logger
 }
 
-func newRollingFile(config Config) io.Writer {
-	if err := os.MkdirAll(config.Directory, 0744); err != nil {
-		log.Error().Err(err).Str("path", config.Directory).Msg("can't create logging directory")
+func newRollingFile(options rootOptions) io.Writer {
+	if err := os.MkdirAll(options.LogDirectory, 0744); err != nil {
+		log.Error().Err(err).Str("path", options.LogDirectory).Msg("can't create logging directory")
 		return nil
 	}
 
 	return &lumberjack.Logger{
-		Filename:   path.Join(config.Directory, config.Filename),
-		MaxBackups: config.MaxBackups, // files
-		MaxSize:    config.MaxSize,    // megabytes
-		MaxAge:     config.MaxAge,     // days
+		Filename:   path.Join(options.LogDirectory, options.LogFilename),
+		MaxBackups: options.LogFileMaxAge,  // files
+		MaxSize:    options.LogFileMaxSize, // megabytes
+		MaxAge:     options.LogFileMaxAge,  // days
 	}
 }
 

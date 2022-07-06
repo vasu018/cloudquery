@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/cloudquery/cloudquery/internal/logging"
 	"github.com/cloudquery/cq-provider-sdk/provider/diag"
 	"github.com/spf13/viper"
 	"github.com/xeipuuv/gojsonschema"
@@ -122,9 +121,6 @@ func decodeConfig(r io.Reader) (*Config, diag.Diagnostics) {
 		CloudQuery CloudQuery  `yaml:"cloudquery" json:"cloudquery"`
 		Providers  []*Provider `yaml:"providers" json:"providers"`
 	}
-
-	lgc := logging.GlobalConfig
-	yc.CloudQuery.Logger = &lgc
 
 	if err := yaml.NewDecoder(r).Decode(&yc); err != nil {
 		return nil, diag.FromError(err, diag.USER, diag.WithSummary("Failed to parse yaml"))

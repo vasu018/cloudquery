@@ -1,12 +1,22 @@
 package ui
 
-type Table interface {
-	// SetHeaders defines table headers
-	SetHeaders(...string)
+import (
+	"github.com/olekukonko/tablewriter"
+	"github.com/spf13/cast"
+)
 
-	// Append adds rows to the table
-	Append(...interface{})
+type Table struct {
+	writer *tablewriter.Table
+}
 
-	// Render does the actual render of the table
-	Render()
+func (t Table) SetHeaders(headers ...string) {
+	t.writer.SetHeader(headers)
+}
+
+func (t Table) Append(i ...interface{}) {
+	t.writer.Append(cast.ToStringSlice(i))
+}
+
+func (t Table) Render() {
+	t.writer.Render()
 }

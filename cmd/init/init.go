@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cloudquery/cloudquery/cmd/utils"
 	"github.com/cloudquery/cloudquery/pkg/config"
 	"github.com/cloudquery/cloudquery/pkg/core"
 	"github.com/cloudquery/cloudquery/pkg/plugin/registry"
@@ -17,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
 
@@ -46,7 +46,7 @@ func initialize(cmd *cobra.Command, providers []string) error {
 	fs := afero.NewOsFs()
 	ctx := cmd.Context()
 
-	configPath := utils.GetConfigFile() // by definition, this will get us an existing file if possible
+	configPath := viper.ConfigFileUsed() // by definition, this will get us an existing file if possible
 
 	if info, _ := fs.Stat(configPath); info != nil {
 		ui.ColorizedOutput(ui.ColorError, "Error: Config file %s already exists\n", configPath)

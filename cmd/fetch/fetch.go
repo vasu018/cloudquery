@@ -1,16 +1,25 @@
 package fetch
 
 import (
+	"context"
 	"fmt"
-	"strings"
+	"strconv"
 
-	"github.com/cloudquery/cloudquery/cmd/utils"
-	"github.com/cloudquery/cloudquery/internal/analytics"
+	"github.com/cloudquery/cloudquery/cmd/flags"
+	"github.com/cloudquery/cloudquery/internal/firebase"
 	"github.com/cloudquery/cloudquery/pkg/config"
-	"github.com/cloudquery/cloudquery/pkg/errors"
-	"github.com/cloudquery/cloudquery/pkg/ui/console"
+	"github.com/cloudquery/cloudquery/pkg/core"
+	"github.com/cloudquery/cloudquery/pkg/core/database"
+	"github.com/cloudquery/cloudquery/pkg/core/state"
+	"github.com/cloudquery/cloudquery/pkg/plugin"
+	"github.com/cloudquery/cloudquery/pkg/plugin/registry"
+	"github.com/cloudquery/cloudquery/pkg/ui"
+	"github.com/cloudquery/cq-provider-sdk/cqproto"
+	"github.com/cloudquery/cq-provider-sdk/provider/diag"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/vbauerster/mpb/v6/decor"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -24,114 +33,236 @@ const (
 )
 
 func NewCmdFetch() *cobra.Command {
-	fetchCmd := &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "fetch",
 		Short:   fetchShort,
 		Long:    fetchLong,
 		Example: fetchExample,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfgMutator := filterConfigProviders(args)
-			c, err := console.CreateClient(cmd.Context(), utils.GetConfigFile(), false, cfgMutator, utils.InstanceId)
-			if err != nil {
-				return err
-			}
-			result, diags := c.Fetch(cmd.Context())
-			errors.CaptureDiagnostics(diags, map[string]string{"command": "fetch"})
-			if result != nil {
-				for _, p := range result.ProviderFetchSummary {
-					analytics.Capture("fetch", c.Providers, p, diags, "fetch_id", result.FetchId)
-				}
-			}
-			if diags.HasErrors() {
-				return fmt.Errorf("provider has one or more errors, check logs")
-			}
-			return nil
-		},
+		RunE:    runFetch,
 	}
-	fetchCmd.Flags().Bool("skip-schema-upgrade", false, "skip schema upgrade of provider fetch, disabling this flag might cause issues")
-	_ = viper.BindPFlag("skip-schema-upgrade", fetchCmd.Flags().Lookup("skip-schema-upgrade"))
-	fetchCmd.Flags().Bool("redact-diags", false, "show redacted diagnostics only")
-	_ = viper.BindPFlag("redact-diags", fetchCmd.Flags().Lookup("redact-diags"))
-	_ = fetchCmd.Flags().MarkHidden("redact-diags")
-	return fetchCmd
+	flags.AddDBFlags(cmd)
+	cmd.Flags().String("config", "cloudquery.yml", "Path to the cloudquery fetch configuration file")
+	cmd.Flags().Bool("redact-diags", false, "show redacted diagnostics only")
+	_ = viper.BindPFlag("redact-diags", cmd.Flags().Lookup("redact-diags"))
+	_ = cmd.Flags().MarkHidden("redact-diags")
+	return cmd
 }
 
-// filterConfigProviders gets a list of "providerAlias:resource1,resource2" items and updates the given config, removing non-matching providers
-// valid usages:
-// "aws" or "aws:*" (all resources specified in the config)
-// "aws:ec2.instances,s3.buckets" (only ec2.instances and s3.buckets)
-func filterConfigProviders(list []string) func(*config.Config) error {
-	return func(cfg *config.Config) error {
-		if len(list) == 0 || cfg == nil || len(cfg.Providers) == 0 || len(cfg.CloudQuery.Providers) == 0 {
-			return nil
-		}
-
-		pMap := make(map[string][]string, len(list)) // provider vs resources
-		for _, item := range list {
-			parts := strings.SplitN(item, ":", 2)
-			prov := parts[0]
-			if len(parts) == 2 && parts[1] != "*" {
-				resources := strings.Split(parts[1], ",")
-				pMap[prov] = make([]string, len(resources))
-				copy(pMap[prov], resources)
-			} else {
-				pMap[prov] = nil
-			}
-		}
-
-		requiredProviders := make(map[string]struct{})
-		for i, p := range cfg.Providers {
-			var (
-				resList []string
-				ok      bool
-			)
-
-			if p.Alias != "" {
-				resList, ok = pMap[p.Alias]
-			} else {
-				resList, ok = pMap[p.Name]
-			}
-			if !ok {
-				cfg.Providers[i] = nil
-				continue
-			}
-
-			requiredProviders[p.Name] = struct{}{}
-
-			if len(resList) > 0 {
-				cfg.Providers[i].Resources = resList
-			}
-		}
-
-		// Remove non-required providers and zero unused pointers afterwards
-		{
-			i := 0
-			for _, p := range cfg.CloudQuery.Providers {
-				if _, ok := requiredProviders[p.Name]; ok {
-					cfg.CloudQuery.Providers[i] = p
-					i++
-				}
-			}
-			for j := i; j < len(cfg.CloudQuery.Providers); j++ {
-				cfg.CloudQuery.Providers[j] = nil
-			}
-			cfg.CloudQuery.Providers = cfg.CloudQuery.Providers[:i]
-		}
-		{
-			i := 0
-			for _, p := range cfg.Providers {
-				if p != nil {
-					cfg.Providers[i] = p
-					i++
-				}
-			}
-			cfg.Providers = cfg.Providers[:i]
-		}
-
-		if len(cfg.CloudQuery.Providers) == 0 || len(cfg.Providers) == 0 {
-			return fmt.Errorf("nothing to fetch")
-		}
-
-		return nil
+func runFetch(cmd *cobra.Command, args []string) error {
+	cfg, ok := loadFetchConfig(viper.ConfigFileUsed())
+	if _, dd := c.SyncProviders(cmd.Context(), cfg.cfg.Providers.Names()...); dd.HasErrors() {
+		return nil, dd
 	}
+
+	hub := registry.NewRegistryHub(firebase.CloudQueryRegistryURL, registry.WithPluginDirectory(cfg.CloudQuery.PluginDirectory), registry.WithProgress(progressUpdater))
+	pm, err := plugin.NewManager(hub, plugin.WithAllowReattach())
+	if err != nil {
+		return err
+	}
+	pr, err := pm.DownloadProviders(cmd.Context(), providers, true)
+	if err != nil {
+		return err
+	}
+
+	storage := database.NewStorage(cfg.CloudQuery.Connection.DSN, dialect)
+	stateManager, err := state.NewClient(cmd.Context(), storage.DSN())
+	if err != nil {
+		return err
+	}
+
+	ui.ColorizedOutput(ui.ColorProgress, "Starting provider fetch...\n\n")
+	var (
+		fetchProgress ui.Progress
+		fetchCallback core.FetchUpdateCallback
+	)
+	if ui.DoProgress() {
+		fetchProgress, fetchCallback = buildFetchProgress(cmd.Context(), c.cfg.Providers)
+	}
+
+	providers := make([]core.ProviderInfo, len(c.cfg.Providers))
+	for i, p := range c.cfg.Providers {
+		rp, ok := c.Providers.Get(p.Name)
+		if !ok {
+			diags := diag.FromError(fmt.Errorf("failed to find provider %s in configuration", p.Name), diag.USER)
+			diags.PrintDiagnostics("Fetch", &diags, viper.GetBool("redact-diags"), viper.GetBool("verbose"))
+			return nil, diags
+		}
+		providers[i] = core.ProviderInfo{Provider: rp, Config: p, ConfigFormat: cqproto.ConfigYAML}
+	}
+	result, diags := core.Fetch(cmd.Context(), c.StateManager, c.Storage, c.PluginManager, &core.FetchOptions{
+		UpdateCallback: fetchCallback,
+		ProvidersInfo:  providers,
+		FetchId:        c.instanceId,
+	})
+	// first wait for progress to complete correctly
+	if fetchProgress != nil {
+		fetchProgress.MarkAllDone()
+		fetchProgress.Wait()
+	}
+	// Check if any errors are found
+	if diags.HasErrors() {
+		// Ignore context cancelled error
+		if st, ok := status.FromError(diags); ok && st.Code() == gcodes.Canceled {
+			diags.PrintDiagnostics("", &diags, viper.GetBool("redact-diags"), viper.GetBool("verbose"))
+			ui.ColorizedOutput(ui.ColorProgress, "Provider fetch canceled.\n\n")
+			return result, diags
+		}
+	}
+	ui.ColorizedOutput(ui.ColorProgress, "Provider fetch complete.\n\n")
+	diags.PrintDiagnostics("Fetch", &diags, viper.GetBool("redact-diags"), viper.GetBool("verbose"))
+	if result == nil {
+		return nil, diags
+	}
+	for _, summary := range result.ProviderFetchSummary {
+		printProviderSummary(summary)
+	}
+	return result, diags
+	return nil
+}
+
+func loadFetchConfig(file string) (*config.Config, bool) {
+	cfg, diags := config.NewParser().LoadConfigFile(file)
+	if diags.HasDiags() {
+		ui.ColorizedOutput(ui.ColorHeader, "Configuration Error Diagnostics:\n")
+		for _, d := range diags {
+			c := ui.ColorInfo
+			switch d.Severity() {
+			case diag.ERROR:
+				c = ui.ColorError
+			case diag.WARNING:
+				c = ui.ColorWarning
+			}
+			ui.ColorizedOutput(c, "❌ %s; %s\n", d.Description().Summary, d.Description().Detail)
+		}
+		if diags.HasErrors() {
+			return nil, false
+		}
+	}
+	return cfg, true
+}
+
+// printProviderSummary is a helper to print the fetch summary in an easily readable format.
+func printProviderSummary(summary *core.ProviderFetchSummary) {
+	s := emojiStatus[ui.StatusOK]
+	if summary.Status == core.FetchCanceled {
+		s = emojiStatus[ui.StatusError] + " (canceled)"
+	}
+	key := summary.Name
+	if summary.Name != summary.Alias {
+		key = summary.Name + `(` + summary.Alias + `)`
+	}
+	diags := summary.Diagnostics().Squash()
+	ui.ColorizedOutput(
+		ui.ColorHeader,
+		"Provider %s fetch summary: %s Total Resources fetched: %d",
+		key,
+		s,
+		summary.TotalResourcesFetched,
+	)
+
+	// errors
+	errors := formatIssues(diags, diag.ERROR, diag.PANIC)
+	if len(errors) > 0 {
+		ui.ColorizedOutput(ui.ColorHeader, "\t ❌ Errors: %s", errors)
+	}
+
+	// warnings
+	warnings := formatIssues(diags, diag.WARNING)
+	if len(warnings) > 0 {
+		ui.ColorizedOutput(ui.ColorHeader, "\t ⚠️ Warnings: %s", warnings)
+	}
+
+	// ignored issues
+	ignored := formatIssues(diags, diag.IGNORE)
+	if len(ignored) > 0 {
+		ui.ColorizedOutput(ui.ColorHeader, "\t ❓ Ignored issues: %s", ignored)
+		ui.ColorizedOutput(ui.ColorHeader,
+			"\nProvider %s finished with %s ignored issues."+
+				"\nThis may be normal, however, you can use `--verbose` flag to see more details.",
+			key, ignored)
+	}
+
+	ui.ColorizedOutput(ui.ColorHeader, "\n\n")
+}
+
+// formatIssues will pretty-print the diagnostics by the requested severities:
+// - for no issues "" is returned
+// - for any deep issues the "base (deep)" amounts are printed
+// - for basic case with no deep issues but rather the base ones, the "base" amount is printed
+func formatIssues(diags diag.Diagnostics, severities ...diag.Severity) string {
+	basic, deep := countSeverity(diags, severities...)
+	switch {
+	case deep > 0:
+		return strconv.FormatUint(basic, 10) + `(` + strconv.FormatUint(deep, 10) + `)`
+	case basic > 0:
+		return strconv.FormatUint(basic, 10)
+	default:
+		return ``
+	}
+}
+
+func countSeverity(d diag.Diagnostics, sevs ...diag.Severity) (basic, deep uint64) {
+	for _, sev := range sevs {
+		basic += d.CountBySeverity(sev, false)
+	}
+
+	if !viper.GetBool("verbose") {
+		return basic, 0
+	}
+
+	for _, sev := range sevs {
+		deep += d.CountBySeverity(sev, true)
+	}
+	return basic, deep
+}
+
+func buildFetchProgress(ctx context.Context, providers []*config.Provider) (*Progress, core.FetchUpdateCallback) {
+	fetchProgress := NewProgress(ctx, func(o *ProgressOptions) {
+		o.AppendDecorators = []decor.Decorator{decor.CountersNoUnit(" Finished Resources: %d/%d")}
+	})
+
+	for _, p := range providers {
+		if len(p.Resources) == 0 {
+			ui.ColorizedOutput(ui.ColorWarning, "%s Skipping provider %s[%s] configured with no resource to fetch\n", emojiStatus[ui.StatusWarn], p.Name, p.Alias)
+			continue
+		}
+
+		if p.Alias != p.Name {
+			fetchProgress.Add(fmt.Sprintf("%s_%s", p.Name, p.Alias), fmt.Sprintf("cq-provider-%s (%s)", p.Name, p.Alias), "fetching", int64(len(p.Resources)))
+		} else {
+			fetchProgress.Add(fmt.Sprintf("%s_%s", p.Name, p.Alias), fmt.Sprintf("cq-provider-%s", p.Name), "fetching", int64(len(p.Resources)))
+		}
+	}
+	fetchCallback := func(update core.FetchUpdate) {
+		name := fmt.Sprintf("%s_%s", update.Name, update.Name)
+		if update.Alias != "" {
+			name = fmt.Sprintf("%s_%s", update.Name, update.Alias)
+		}
+		if update.DiagnosticCount > 0 {
+			fetchProgress.Update(name, ui.StatusWarn, fmt.Sprintf("diagnostics: %d", update.DiagnosticCount), 0)
+		}
+		bar := fetchProgress.GetBar(name)
+		if bar == nil {
+			fetchProgress.AbortAll()
+			ui.ColorizedOutput(ui.ColorError, "❌ console UI failure, fetch will complete shortly\n")
+			return
+		}
+		if bar.Total < int64(len(update.FinishedResources)) {
+			bar.SetTotal(int64(len(update.FinishedResources)), false)
+		}
+
+		bar.b.IncrBy(update.DoneCount() - int(bar.b.Current()))
+
+		if bar.Status == ui.StatusError {
+			if update.AllDone() {
+				bar.SetTotal(0, true)
+			}
+			return
+		}
+		if update.AllDone() && bar.Status != ui.StatusWarn {
+			fetchProgress.Update(name, ui.StatusOK, "fetch complete", 0)
+			return
+		}
+	}
+	return fetchProgress, fetchCallback
 }

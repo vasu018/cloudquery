@@ -1,8 +1,6 @@
 package policy
 
 import (
-	"github.com/cloudquery/cloudquery/cmd/utils"
-	"github.com/cloudquery/cloudquery/pkg/ui/console"
 	"github.com/spf13/cobra"
 )
 
@@ -21,22 +19,17 @@ cloudquery policy describe github.com/COMMUNITY_GITHUB_ORG/aws
 
 # See https://hub.cloudquery.io for additional policies.
 `
+	describeDeprecated = "policy describe is deprecated"
 )
 
 func newCmdPolicyDescribe() *cobra.Command {
 	describePolicyCmd := &cobra.Command{
-		Use:     "describe",
-		Short:   describeShort,
-		Long:    describeShort,
-		Example: describeExample,
-		Args:    cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := console.CreateClient(cmd.Context(), utils.GetConfigFile(), true, nil, utils.InstanceId)
-			if err != nil {
-				return err
-			}
-			return c.DescribePolicies(cmd.Context(), args[0])
-		},
+		Use:        "describe",
+		Short:      describeShort,
+		Long:       describeShort,
+		Example:    describeExample,
+		Args:       cobra.ExactArgs(1),
+		Deprecated: describeDeprecated,
 	}
 	return describePolicyCmd
 }

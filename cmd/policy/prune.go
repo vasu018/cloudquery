@@ -2,11 +2,14 @@ package policy
 
 import (
 	"fmt"
+	"time"
 
-	"github.com/cloudquery/cloudquery/cmd/utils"
-	"github.com/cloudquery/cloudquery/pkg/errors"
-	"github.com/cloudquery/cloudquery/pkg/ui/console"
+	"github.com/cloudquery/cloudquery/cmd/diags"
+	"github.com/cloudquery/cloudquery/pkg/policy"
+	"github.com/cloudquery/cloudquery/pkg/ui"
+	"github.com/cloudquery/cq-provider-sdk/provider/diag"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 const (
@@ -23,19 +26,21 @@ func newCmdPolicyPrune() *cobra.Command {
 		Long:    pruneShort,
 		Example: pruneExample,
 		Args:    cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := console.CreateClient(cmd.Context(), utils.GetConfigFile(), false, nil, utils.InstanceId)
-			if err != nil {
-				return err
-			}
-			retentionPeriod := args[0]
-			diags := c.PrunePolicyExecutions(cmd.Context(), retentionPeriod)
-			errors.CaptureDiagnostics(diags, map[string]string{"command": "policy_prune"})
-			if diags.HasErrors() {
-				return fmt.Errorf("policy prune has one or more errors, check logs")
-			}
-			return nil
-		},
+		RunE:    runPolicyRun,
 	}
 	return cmd
+}
+
+func runPrune(cmd *cobra.Command, args []string) error {
+	defer diags.PrintDiagnostics("", &diags, viper.GetBool("redact-diags"), viper.GetBool("verbose"))
+	duration, err := time.ParseDuration(args[1])
+	if err != nil {
+		ui.ColorizedOutput(ui.ColorError, err.Error())
+		return diag.FromError(err, diag.USER)
+	}
+	pruneBefore := time.Now().Add(-duration)
+	if !pruneBefore.Before(time.Now()) {
+		return diag.FromError(fmt.Errorf("prune retention period can't be in the future"), diag.USER)
+	}
+	return policy.Prune(cmd.Context(), c.StateManager, pruneBefore)
 }
