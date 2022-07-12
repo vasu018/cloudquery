@@ -4,6 +4,13 @@ All notable changes to CloudQuery will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.31.8](https://github.com/cloudquery/cloudquery/compare/v0.31.7...v0.31.8) (2022-07-12)
+
+
+### Bug Fixes
+
+* Add GH actions to install src detection ([#1117](https://github.com/cloudquery/cloudquery/issues/1117)) ([398fe43](https://github.com/cloudquery/cloudquery/commit/398fe435cd03e0141e32d20f6a55247f4fc0ebd8))
+
 ## [0.31.7](https://github.com/cloudquery/cloudquery/compare/v0.31.6...v0.31.7) (2022-07-08)
 
 
